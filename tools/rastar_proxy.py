@@ -34,7 +34,16 @@ class Handler(http.server.SimpleHTTPRequestHandler):
 
     def end_headers(self):
         self.send_header("Cache-Control", "no-store, no-cache, must-revalidate, max-age=0")
+        # CORS: allow HTML5 builds served from other local ports (e.g. the Defold
+        # editor's built-in server) to call this proxy cross-origin.
+        self.send_header("Access-Control-Allow-Origin", "*")
+        self.send_header("Access-Control-Allow-Methods", "GET,POST,PUT,PATCH,DELETE,OPTIONS")
+        self.send_header("Access-Control-Allow-Headers", "Authorization, Content-Type, x-app-id")
         super().end_headers()
+
+    def do_OPTIONS(self):  # CORS preflight
+        self.send_response(204)
+        self.end_headers()
 
     def _proxy(self):
         url = args.upstream + self.path[len(args.prefix):]

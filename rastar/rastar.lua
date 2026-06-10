@@ -136,8 +136,14 @@ local function request(path, method, body, auth, cb, _base, _busted)
             log("304 -> cache-bust retry")
             request(path .. sep .. "_cb=" .. tostring(os.time()) .. tostring(bust_n),
                 method, body, auth, cb, base, true)
-        elseif status == 0 and cfg.fallback_base_url and base ~= cfg.fallback_base_url then
-            -- direct connection failed (offline / proxy-only network) -> retry via fallback
+        elseif (status == 0 or (status == 404 and parsed == nil))
+            and cfg.fallback_base_url and base ~= cfg.fallback_base_url then
+            -- Retry via the fallback when:
+            --  * status 0  - couldn't connect at all (offline / proxy-only network), or
+            --  * status 404 with a NON-JSON body - the current origin has no API
+            --    proxy route at all (e.g. an HTML5 build served by the Defold
+            --    editor's own static server). Real API 404s return JSON and are
+            --    NOT retried.
             log("retrying via fallback:", cfg.fallback_base_url)
             request(path, method, body, auth, cb, cfg.fallback_base_url, _busted)
         else
