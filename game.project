@@ -1,0 +1,6 @@
+[project]
+title = defold-rastar
+version = 1.0.0
+
+[library]
+include_dirs = rastar
