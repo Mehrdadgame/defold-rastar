@@ -171,6 +171,39 @@ python tools/rastar_proxy.py --dir "<پوشهٔ باندل HTML5>" --port 8123
 برای **دسکتاپ/ادیتور** هم اگر شبکهٔ سیستم پشت پراکسی ویندوز است همین سرور را روشن
 بگذار — `fallback_base_url` خودش به آن سوییچ می‌کند.
 
+### استقرار روی هاست دلخواه (آپلود باندل به سرور خودت)
+
+سه راه — یکی را انتخاب کن:
+
+1. **پراکسی پایتون روی همان سرور:** کل پوشهٔ باندل را آپلود کن و به‌جای static server
+   معمولی، `rastar_proxy.py --dir <پوشه>` را اجرا کن (هم serve می‌کند هم `/rastarapi`).
+2. **nginx/آپاچی داری؟** فقط این location را اضافه کن (و باندل را استاتیک serve کن):
+
+```nginx
+location /rastarapi/ {
+    proxy_pass https://rastar-center-api.rastar.ir/;
+    proxy_set_header Host rastar-center-api.rastar.ir;
+    proxy_set_header If-None-Match "";
+    proxy_set_header If-Modified-Since "";
+    proxy_hide_header ETag;
+    proxy_hide_header Last-Modified;
+}
+```
+
+3. **پراکسی جای دیگری است؟** در `index.html` متغیر را ست کن تا بازی همان را صدا بزند:
+
+```html
+<script>window.RASTAR_API = "https://your-host/rastarapi";</script>
+```
+
+⚠️ **هشدارهای استقرار:**
+- **همهٔ فایل‌های باندل را با هم** آپلود کن (index.html + dmloader + پوشهٔ archive).
+  اگر فایل‌ها از دو بیلد قاطی شوند، dmloader خطای
+  `file verification failed! Unexpected data size: game.projectc` می‌دهد و بازی بالا
+  نمی‌آید — بعد از هر آپلود، کش CDN/مرورگر را هم پاک کن (Ctrl+Shift+R).
+- خطاهای `contentscript.js` (MaxListenersExceeded، ObjectMultiplex و CSP eval) مال
+  **افزونه‌های مرورگر** (مثل MetaMask) هستند، نه بازی — در حالت Incognito تست کن.
+
 ---
 
 ## ۷) نمایش اسم‌های فارسی (اختیاری)
