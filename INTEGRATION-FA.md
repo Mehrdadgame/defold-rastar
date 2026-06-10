@@ -156,8 +156,31 @@ rastar.get_my_rank(board_id, function(ok, mine) end)  -- mine = { rank, score, u
 API فعلاً `Access-Control-Allow-Origin` نمی‌فرستد، پس مرورگر تماس مستقیم از دامنهٔ
 دیگر را بلاک می‌کند. دو راه:
 
-1. **(درست‌ترین)** تیم بک‌اند originِ بازی را whitelist کند → آن‌وقت `base_url` همان
-   آدرس API می‌شود و پراکسی لازم نیست.
+1. **(درست‌ترین — برای همهٔ بازی‌های وب یک بار حل می‌شود)** تیم بک‌اند CORS را کامل
+   کند. وضعیت فعلی سرور: preflight پاسخ `Access-Control-Allow-Credentials/Methods/
+   Headers` می‌دهد ولی **`Access-Control-Allow-Origin` ندارد** — یعنی میدل‌ور CORS فعال
+   است و فقط باید originها ست شوند. متن آماده برای تیم بک‌اند:
+
+   > روی `rastar-center-api.rastar.ir` هدر `Access-Control-Allow-Origin` را برای
+   > دامنه‌های بازی‌ها (یا `origin: true` برای echo) فعال کنید — هم روی پاسخ preflight
+   > (OPTIONS) هم روی پاسخ‌های واقعی. نمونهٔ NestJS/Express:
+   > ```js
+   > app.enableCors({
+   >   origin: true,            // یا آرایهٔ دامنه‌های مجاز بازی‌ها
+   >   credentials: true,
+   >   methods: "GET,HEAD,PUT,PATCH,POST,DELETE,OPTIONS",
+   >   allowedHeaders: "Content-Type, Authorization, x-app-id",
+   > });
+   > ```
+   > تست صحت (باید `Access-Control-Allow-Origin` در خروجی باشد):
+   > ```bash
+   > curl -si https://rastar-center-api.rastar.ir/api/v1/client/leaderboards/active \
+   >   -H "Origin: https://your-game-host.com" -H "x-app-id: bitbox" | grep -i access-control
+   > ```
+
+   کلاینت این پکیج از قبل آماده است: روی وب اول تماس مستقیم را امتحان می‌کند و فقط
+   اگر بلاک شد سراغ پراکسی می‌رود — یعنی به‌محض فعال‌شدن CORS، همهٔ بیلدها بدون
+   پراکسی و بدون rebuild کار می‌کنند.
 2. **پراکسی same-origin** کنار خود بازی (همین الان کار می‌کند):
 
 ```
