@@ -5,7 +5,7 @@
 # direct cross-origin calls otherwise). The game calls /rastarapi/<path> on its
 # own origin and this server forwards it to the API.
 #
-#   python rastar_proxy.py [--dir <bundle_dir>] [--port 8123] [--upstream https://rastar-center-api.rastar.ir]
+#   python rastar_proxy.py [--dir <bundle_dir>] [--port 8123] [--upstream https://baziche-api-dev.rastar.ir]
 #
 # Notes baked in from production debugging:
 #  * threaded (a stuck client connection must not block everyone)
@@ -19,7 +19,7 @@ ap = argparse.ArgumentParser()
 ap.add_argument("--dir", default=".", help="folder with the HTML5 bundle (index.html)")
 ap.add_argument("--port", type=int, default=8123)
 ap.add_argument("--prefix", default="/rastarapi")
-ap.add_argument("--upstream", default="https://rastar-center-api.rastar.ir")
+ap.add_argument("--upstream", default="https://baziche-api-dev.rastar.ir")
 args = ap.parse_args()
 
 HOP = {"connection", "keep-alive", "transfer-encoding", "te", "trailer",

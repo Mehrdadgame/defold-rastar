@@ -1,5 +1,9 @@
 # راهنمای اتصال بازی Defold به بک‌اند Rastar Center
 
+> **بک‌اند فعلی (baziche):** dev = `https://baziche-api-dev.rastar.ir` (`/docs` = swagger)
+> | dashboard = `https://baziche-admin-dev.rastar.ir`. originهای
+> `mehrdadgame.github.io` و `localhost:8123` در CORS وایت‌لیست شده‌اند → وب مستقیم وصل می‌شود.
+
 این پکیج (`defold-rastar`) پورتِ Lua از **Rastar-Center-Unity-SDK** است: همان REST API، همان
 هدرها، همان مدل داده — ولی قابل استفاده در هر بازی Defold (وب، دسکتاپ، موبایل). هیچ
 native extension لازم ندارد؛ فقط `http.request` و `json` خود Defold.
@@ -8,10 +12,24 @@ native extension لازم ندارد؛ فقط `http.request` و `json` خود De
 
 | فایل | کاربرد |
 |---|---|
-| `rastar/rastar.lua` | کلاینت API: لاگین، پروفایل، امتیاز/event، لیدربورد |
+| `rastar/rastar.lua` | هستهٔ کلاینت: لاگین (همهٔ روش‌ها)، پروفایل، امتیاز، لیدربورد، events، games |
+| `rastar/api.lua` | **کل سطح API** — ۲۲۳ تابع تولیدشده از swagger در ۳۴ ماژول (assets، avatars، clans، friends، shops، tasks، quiz-v2، payments، …) |
 | `rastar/farsi.lua` | شکل‌دهی متن فارسی/عربی برای رندر در Defold (اختیاری) |
 | `rastar/fonts/persian.ttf` + `names.font` | فونت Vazirmatn با حروف فارسی (اختیاری) |
 | `tools/rastar_proxy.py` | سرور استاتیک + پراکسی same-origin برای بیلد وب |
+| `tools/gen_rastar_api.py` + `openapi.json` | بازتولید `api.lua` بعد از هر آپدیت بک‌اند |
+
+**سه سطح دسترسی به API** (از مشخص به عام):
+```lua
+local rastar = require "rastar.rastar"   -- ۱) توابع اصلی دست‌نویس (لاگین/امتیاز/لیدربورد...)
+local api    = require "rastar.api"      -- ۲) همهٔ ماژول‌ها: api.get_friends(nil, cb) ، api.post_clans_join(clan_id, nil, cb) ...
+rastar.request("/api/v1/client/...", "GET", nil, cb)  -- ۳) هر endpoint دلخواه (escape hatch)
+```
+وقتی بک‌اند آپدیت شد:
+```bash
+curl -o tools/openapi.json https://baziche-api-dev.rastar.ir/openapi.json
+python tools/gen_rastar_api.py
+```
 
 ---
 
@@ -39,7 +57,7 @@ local rastar = require "rastar.rastar"
 ```lua
 local rastar = require "rastar.rastar"
 
-local BASE = "https://rastar-center-api.rastar.ir"
+local BASE = "https://baziche-api-dev.rastar.ir"   -- production: آدرس prod را بگذار
 if html5 then
     -- وب: API هدر CORS نمی‌فرستد؛ از طریق پراکسی same-origin صدا بزن (بخش ۶)
     BASE = rastar.html5_origin() .. "/rastarapi"
@@ -47,7 +65,7 @@ end
 
 rastar.init({
     base_url          = BASE,
-    app_id            = "bitbox",                      -- اپ‌آیدی خودت
+    app_id            = "",   -- بک‌اند جدید (baziche) تک‌اپ است؛ x-app-id لازم ندارد
     -- دسکتاپ/ادیتور: اگر اینترنتِ سیستم فقط از پراکسی ویندوز رد می‌شود، موتور
     -- Defold آن را نمی‌بیند ("No route to host") — این آدرس به‌صورت خودکار
     -- به‌عنوان مسیر دوم امتحان می‌شود:
@@ -94,40 +112,27 @@ end)
 
 ---
 
-## ۴) امتیاز — معادل `SendCashAsync` یونیتی
+## ۴) امتیاز — ثبت مستقیم روی لیدربورد (بک‌اند جدید)
 
-در این بک‌اند، امتیاز از مسیر **Events** می‌رود و لیدربوردها روی همان eventها ساخته
-می‌شوند:
+در بک‌اند جدید (baziche / FastAPI) امتیاز **مستقیم روی لیدربورد** ثبت می‌شود و خود
+سرور بر اساس `eventCalculationType` بورد جمع می‌زند (مثلاً `high_value` = همیشه
+بهترین امتیاز هر بازیکن نگه داشته می‌شود):
 
 ```lua
--- پایان هر دست: امتیازِ کسب‌شده را به‌صورت «عدد» بفرست
-rastar.send_event("wallet:revealed", score,
-    { game = "mygame", score = score },                 -- metadata دلخواه
-    function(ok, res) end,
-    "87faac1a-547b-4077-8d5e-437a50eb1379")             -- entityId (اختیاری؛ در metadata می‌نشیند)
+-- یک بار: پیدا کردن بورد با key پایدار
+rastar.get_leaderboard_by_key("weekly_Leaderboard", function(ok, lb)
+    -- lb.id , lb.eventCalculationType ("high_value") , lb.lifeSpanHours (168 = هفتگی)
+end)
 
--- بهترین امتیاز شخصی (محاسبه سمت سرور روی eventهای خودت)
-rastar.calculate_event("wallet:revealed", "high_value", function(ok, best) end)
-
--- مجموع امتیازهای شخصی
-rastar.calculate_event("wallet:revealed", "sum_value", function(ok, total) end)
+-- پایان هر دست: ثبت امتیاز؛ پاسخ، امتیازِ نگه‌داشته‌شده + رتبهٔ فعلی توست
+rastar.register_score(lb.id, score, { game = "mygame" }, function(ok, res)
+    -- res.value = بهترین امتیازت (سرور خودش max را نگه می‌دارد)
+    -- res.rank  = رتبهٔ فعلی
+end)
 ```
 
-⚠️ **دو نکتهٔ حیاتی:**
-1. ستون امتیازِ لیدربورد را تنظیمِ خود لیدربورد تعیین می‌کند:
-   `eventCalculationType` = `count` (تعداد دفعات بازی) / `sum_value` (مجموع امتیازها) /
-   `high_value` (**بیشترین امتیاز** — برای «بهترین رکورد هر بازیکن» همین را بگذار).
-   این فیلد فقط از **پنل ادمین Rastar** قابل تغییر است — API کلاینت هیچ route ِ
-   نوشتنی برای لیدربورد ندارد (تست شده: PATCH/PUT → 404؛ سطح `/api/v1/admin` هم
-   401-محافظت‌شده است).
-2. مقدار را **عدد** بفرست (این SDK همیشه `payload.type="number"` می‌فرستد). اورلود
-   `score.ToString()` در یونیتی payload از نوع string می‌سازد که برای sum/high مناسب نیست —
-   در یونیتی هم بهتر است اورلود float صدا زده شود.
-
-> API فیلد `entityId` را در بدنهٔ send **قبول نمی‌کند** («property entityId should not
-> exist») — این SDK آن را در `metadata.entityId` می‌گذارد.
-
----
+> مسیر قدیمیِ events (`send_event` / `calculate_event`) هنوز در SDK هست و روی
+> بک‌اند جدید هم endpoint دارد، ولی برای امتیازِ لیدربورد دیگر لازم نیست.
 
 ## ۵) لیدربورد
 
@@ -135,9 +140,13 @@ rastar.calculate_event("wallet:revealed", "sum_value", function(ok, total) end)
 -- لیست بوردهای فعال (id + key + eventType + eventCalculationType)
 rastar.get_active_leaderboards(function(ok, boards) end)
 
--- ۱۰ نفر برتر یک بورد
+-- ۱۰ نفر برتر یک بورد (endpoint جدید: /ranks)
+rastar.get_leaderboard_ranks(board_id, 1, 10, function(ok, data)
+    -- data.users[i] = { rank, value, userId, userData = { name, username, lastName } }
+end)
+-- یا با همان شکل قدیمی:
 rastar.get_leaderboard_scores(board_id, 1, 10, function(ok, items)
-    -- items[i] = { rank, score, user = { userId, username, firstName, lastName } }
+    -- items[i] = { rank, score, user = {...} }  (سازگار با کد قدیمی)
 end)
 
 -- رتبهٔ خودم
@@ -153,8 +162,11 @@ rastar.get_my_rank(board_id, function(ok, mine) end)  -- mine = { rank, score, u
 
 ## ۶) بیلد وب (HTML5) — CORS و پراکسی
 
-API فعلاً `Access-Control-Allow-Origin` نمی‌فرستد، پس مرورگر تماس مستقیم از دامنهٔ
-دیگر را بلاک می‌کند. دو راه:
+✅ **بک‌اند جدید (baziche) وایت‌لیست CORS دارد** و `mehrdadgame.github.io` +
+`localhost:8123` همین حالا وایت‌لیست شده‌اند → وب از این دامنه‌ها **مستقیم** وصل
+می‌شود و پراکسی لازم نیست. برای هر دامنهٔ جدید فقط origin را (بدون path) به تیم
+بک‌اند بده تا به `BACKEND_CORS_ORIGINS` اضافه کند. مطالب زیر برای دامنه‌های
+وایت‌لیست‌نشده یا شبکه‌های پشت پراکسی است:
 
 1. **(درست‌ترین — برای همهٔ بازی‌های وب یک بار حل می‌شود)** تیم بک‌اند CORS را کامل
    کند. وضعیت فعلی سرور: preflight پاسخ `Access-Control-Allow-Credentials/Methods/
@@ -286,8 +298,11 @@ calculate_event(event_type, "count"|"sum_value"|"high_value", cb)
 get_event_count(event_type, cb)
 
 get_active_leaderboards(cb)
-get_leaderboard_scores(id, page, limit, cb)
-get_my_rank(id, cb)
+get_leaderboard_by_key(key, cb)                 -- بورد با key پایدار (مثل weekly_Leaderboard)
+register_score(leaderboard_id, value, meta, cb) -- ثبت امتیاز؛ پاسخ: {value, rank}
+get_leaderboard_ranks(id, page, limit, cb)      -- خام جدید: {leaderboard, users[]}
+get_leaderboard_scores(id, page, limit, cb)     -- سازگار با شکل قدیمی
+get_my_rank(id, cb)                             -- پاسخ جدید: {rank, value, userData}
 
 -- مسیر قدیمی games (اگر برای اپ‌ات game تعریف شده):
 list_games(page, limit, cb) / send_score(score, cb) / get_my_game(cb) / get_high_score(cb)

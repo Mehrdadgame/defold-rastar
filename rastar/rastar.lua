@@ -108,7 +108,10 @@ local function request(path, method, body, auth, cb, _base, _busted)
     assert(cfg.base_url ~= "", "rastar.init() not called (base_url empty)")
     local base = _base or cfg.base_url
     local url = base .. path
-    local headers = { ["x-app-id"] = cfg.app_id }
+    -- x-app-id is only needed by the old multi-app backend; the new per-app
+    -- backends (e.g. baziche) ignore it, so it is sent only when configured.
+    local headers = {}
+    if cfg.app_id and cfg.app_id ~= "" then headers["x-app-id"] = cfg.app_id end
     local payload = nil
     if body ~= nil then
         headers["Content-Type"] = "application/json"
@@ -247,6 +250,44 @@ function M.logout(cb)
     end)
 end
 
+-- platform: e.g. "google" | "apple"; token: the provider's id/access token
+function M.social_login(platform, token, cb)
+    request("/api/v1/client/auth/social-login", "POST",
+        { platform = platform, token = token }, false, on_login(cb))
+end
+
+function M.verify_magic_link(magic_token, cb)
+    request("/api/v1/client/auth/verify-magic-link?token=" .. (magic_token or ""),
+        "GET", nil, false, on_login(cb))
+end
+
+-- method: "EMAIL" | "SMS", type: usually "AUTH"
+function M.resend_otp(otp_type, method, cb)
+    request("/api/v1/client/auth/resend-otp", "POST",
+        { type = otp_type or "AUTH", method = method or "SMS" }, true, cb)
+end
+
+function M.reset_password(phone, email, cb)
+    request("/api/v1/client/auth/reset-password", "POST",
+        { phoneNumber = phone, email = email }, false, cb)
+end
+
+function M.set_password(new_password, cb)
+    request("/api/v1/client/auth/set-password", "POST",
+        { newPassword = new_password }, true, on_login(cb))
+end
+
+-- send an OTP to a NEW phone/email to verify the change
+function M.change_phone(new_phone, cb)
+    request("/api/v1/client/auth/change-phone-email", "POST",
+        { phoneNumber = new_phone }, true, cb)
+end
+
+function M.change_email(new_email, cb)
+    request("/api/v1/client/auth/change-phone-email", "POST",
+        { email = new_email }, true, cb)
+end
+
 --------------------------------------------------------------------------------
 -- user profile  (/api/v1/client/users/*)
 --------------------------------------------------------------------------------
@@ -264,6 +305,27 @@ function M.update_profile(fields, cb)
         if ok then state.profile = data end
         if cb then cb(ok, data, raw) end
     end)
+end
+
+function M.search_users(query, cb)
+    request("/api/v1/client/users/search?query=" .. (query or ""), "GET", nil, true, cb)
+end
+
+function M.update_password(current_password, new_password, cb)
+    request("/api/v1/client/users/update-password", "POST",
+        { currentPassword = current_password, newPassword = new_password }, true, cb)
+end
+
+function M.get_user_by_invite_code(invite_code, cb)
+    request("/api/v1/client/users/invite-code/" .. (invite_code or ""), "GET", nil, true, cb)
+end
+
+function M.set_inviter(invite_code, cb)
+    request("/api/v1/client/users/set-inviter", "POST", { inviteCode = invite_code }, true, cb)
+end
+
+function M.delete_account(cb)
+    request("/api/v1/client/users/me", "DELETE", nil, true, cb)
 end
 
 --------------------------------------------------------------------------------
@@ -319,6 +381,29 @@ function M.get_high_score(cb, game_id)
     end, game_id)
 end
 
+function M.get_game(game_id, cb)
+    request("/api/v1/client/games/" .. need_game_id(game_id), "GET", nil, true, cb)
+end
+
+function M.give_game(cb, game_id)
+    request(("/api/v1/client/games/%s/give"):format(need_game_id(game_id)), "POST", nil, true, cb)
+end
+
+function M.get_my_games_list(page, limit, cb)
+    request(("/api/v1/client/games/my-games/list?page=%d&limit=%d"):format(page or 1, limit or 20),
+        "GET", nil, true, cb)
+end
+
+function M.get_my_game_by_usergame_id(user_game_id, cb)
+    request("/api/v1/client/games/my-games/" .. user_game_id, "GET", nil, true, cb)
+end
+
+-- metadata: free-form table stored on my game record
+function M.update_game_metadata(metadata, cb, game_id)
+    request(("/api/v1/client/games/%s/update-metadata"):format(need_game_id(game_id)),
+        "PATCH", { metadata = metadata }, true, cb)
+end
+
 --------------------------------------------------------------------------------
 -- events  (/api/v1/client/events/*)
 -- Events are the backbone of leaderboards: a leaderboard aggregates events of
@@ -364,21 +449,100 @@ function M.get_event_count(event_type, cb)
 end
 
 --------------------------------------------------------------------------------
--- leaderboards (read)  (/api/v1/client/leaderboards/*)
+-- leaderboards  (/api/v1/client/leaderboards/*)
+-- New (baziche/FastAPI) backend: scores are registered DIRECTLY on a
+-- leaderboard; the server applies the board's eventCalculationType (e.g.
+-- high_value keeps each player's best). No events round-trip needed.
 --------------------------------------------------------------------------------
 
 function M.get_active_leaderboards(cb)
     request("/api/v1/client/leaderboards/active", "GET", nil, true, cb)
 end
 
-function M.get_leaderboard_scores(leaderboard_id, page, limit, cb)
-    request(("/api/v1/client/leaderboards/%s/scores?page=%d&limit=%d")
+-- Look a board up by its stable key (e.g. "weekly_Leaderboard").
+-- cb(ok, LeaderboardResponse{id,key,name,eventCalculationType,version,...})
+function M.get_leaderboard_by_key(key, cb)
+    request(("/api/v1/client/leaderboards/key/%s"):format(key), "GET", nil, true, cb)
+end
+
+-- Submit a score. The server aggregates per the board's calculation type and
+-- returns my standing: cb(ok, {value=server_kept_value, rank=..., version=...})
+function M.register_score(leaderboard_id, value, meta, cb)
+    request(("/api/v1/client/leaderboards/%s/register-score"):format(leaderboard_id),
+        "POST", { value = value, meta = meta }, true, cb)
+end
+
+-- Top entries: cb(ok, {leaderboard=..., users={ {rank,value,userId,userData={name,username,...}} }, requestedUserRank})
+function M.get_leaderboard_ranks(leaderboard_id, page, limit, cb)
+    request(("/api/v1/client/leaderboards/%s/ranks?page=%d&limit=%d")
         :format(leaderboard_id, page or 1, limit or 10), "GET", nil, true, cb)
 end
 
+-- Back-compat wrapper shaped like the OLD /scores endpoint: returns a flat
+-- array of { rank, score, user = userData }.
+function M.get_leaderboard_scores(leaderboard_id, page, limit, cb)
+    M.get_leaderboard_ranks(leaderboard_id, page, limit, function(ok, data)
+        if not ok or type(data) ~= "table" then cb(ok, data) return end
+        local items = {}
+        for i, u in ipairs(data.users or {}) do
+            local ud = u.userData or {}
+            ud.userId = ud.userId or u.userId
+            items[i] = { rank = u.rank or i, score = u.value or 0, user = ud }
+        end
+        cb(true, items)
+    end)
+end
+
+-- My standing on a board: cb(ok, {rank, value, userData, ...})
 function M.get_my_rank(leaderboard_id, cb)
     request(("/api/v1/client/leaderboards/%s/users/rank"):format(leaderboard_id),
         "GET", nil, true, cb)
+end
+
+function M.list_leaderboards(page, limit, cb)
+    request(("/api/v1/client/leaderboards/?page=%d&limit=%d"):format(page or 1, limit or 20),
+        "GET", nil, true, cb)
+end
+
+function M.get_leaderboard(leaderboard_id, cb)
+    request("/api/v1/client/leaderboards/" .. leaderboard_id, "GET", nil, true, cb)
+end
+
+-- the rows around ME on the board
+function M.get_my_neighbours(leaderboard_id, cb)
+    request(("/api/v1/client/leaderboards/%s/neighbours"):format(leaderboard_id),
+        "GET", nil, true, cb)
+end
+
+function M.get_users_neighbors(leaderboard_id, cb)
+    request(("/api/v1/client/leaderboards/%s/users/neighbors"):format(leaderboard_id),
+        "GET", nil, true, cb)
+end
+
+-- tier: -1 = my own tier
+function M.get_tier_scores(leaderboard_id, tier, page, limit, cb)
+    request(("/api/v1/client/leaderboards/%s/tiers/scores?tier=%d&page=%d&limit=%d")
+        :format(leaderboard_id, tier or -1, page or 1, limit or 10), "GET", nil, true, cb)
+end
+
+-- a finished season/week of the board
+function M.get_leaderboard_history(leaderboard_id, version, cb)
+    request(("/api/v1/client/leaderboards/%s/history/%d"):format(leaderboard_id, version),
+        "GET", nil, true, cb)
+end
+
+--------------------------------------------------------------------------------
+-- escape hatch: call ANY backend endpoint not wrapped above.
+--   rastar.request("/api/v1/client/avatars", "GET", nil, cb)
+--   rastar.request("/api/v1/client/assets/sync", "POST", { ... }, cb)
+-- opts: { auth = false } to skip the Authorization header (default: attach it).
+-- The full client surface is listed in the backend swagger (<base_url>/docs);
+-- ready-made named wrappers for many modules live in rastar/api.lua.
+--------------------------------------------------------------------------------
+function M.request(path, method, body, cb, opts)
+    local auth = true
+    if opts and opts.auth == false then auth = false end
+    request(path, method or "GET", body, auth, cb)
 end
 
 return M
