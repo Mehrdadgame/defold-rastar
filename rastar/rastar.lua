@@ -532,6 +532,32 @@ function M.get_leaderboard_history(leaderboard_id, version, cb)
 end
 
 --------------------------------------------------------------------------------
+-- currencies  (/api/v1/client/currencies/*)
+-- NOTE: add/use take the currency's UUID (currencyId), NOT its key — the
+-- balance lookup by key returns that id, so resolve once and cache it.
+--------------------------------------------------------------------------------
+
+-- cb(ok, { value = balance, currencyId = uuid, currency = {name, key, ...} })
+function M.get_currency(key, cb)
+    request("/api/v1/client/currencies/" .. key, "GET", nil, true, cb)
+end
+
+function M.get_currencies(cb)
+    request("/api/v1/client/currencies/all", "GET", nil, true, cb)
+end
+
+-- cb(ok, { value = new_balance, ... })
+function M.add_currency(currency_id, value, cb)
+    request("/api/v1/client/currencies/add", "POST",
+        { currencyId = currency_id, value = value }, true, cb)
+end
+
+function M.use_currency(currency_id, value, cb)
+    request("/api/v1/client/currencies/use", "POST",
+        { currencyId = currency_id, value = value }, true, cb)
+end
+
+--------------------------------------------------------------------------------
 -- escape hatch: call ANY backend endpoint not wrapped above.
 --   rastar.request("/api/v1/client/avatars", "GET", nil, cb)
 --   rastar.request("/api/v1/client/assets/sync", "POST", { ... }, cb)
