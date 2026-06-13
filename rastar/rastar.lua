@@ -96,6 +96,71 @@ local function extract_error(parsed, fallback)
     return fallback or "request failed"
 end
 
+--------------------------------------------------------------------------------
+-- HTML5 transport: browser fetch via html5.run + Lua polling.
+--
+-- Defold's built-in wasm http layer was observed mis-sending Authorization on
+-- some browsers: tokens it re-sends fail the server's signature check
+-- ("Invalid access token!") while the IDENTICAL flow via the page's own
+-- fetch/XHR succeeds 100% of the time. So on web every API call is made by the
+-- browser itself; Lua polls for the result with a timer.
+--------------------------------------------------------------------------------
+
+-- percent-encode arbitrary bytes so they survive a JS string literal +
+-- decodeURIComponent round-trip (UTF-8 safe)
+local function jsenc(s)
+    return (tostring(s):gsub("[^%w%-%._~]", function(c)
+        return string.format("%%%02X", string.byte(c))
+    end))
+end
+
+local js_req_n = 0
+local function js_fetch(url, method, headers, payload, timeout, handler)
+    -- one-time bootstrap of the JS side
+    pcall(html5.run, [[
+        (function(){
+            if (window.__rastar) return "";
+            window.__rastar = { rs: {}, rq: function(id, method, url, hdrsEnc, bodyEnc){
+                var o = { method: method, headers: JSON.parse(decodeURIComponent(hdrsEnc)) };
+                var b = decodeURIComponent(bodyEnc);
+                if (b.length > 0) o.body = b;
+                fetch(url, o).then(function(r){
+                    return r.text().then(function(t){
+                        window.__rastar.rs[id] = JSON.stringify({ st: r.status, body: t });
+                    });
+                }).catch(function(e){
+                    window.__rastar.rs[id] = JSON.stringify({ st: 0, body: String(e) });
+                });
+            }};
+            return "";
+        })()
+    ]])
+    js_req_n = js_req_n + 1
+    local id = js_req_n
+    local launched = pcall(html5.run, ('window.__rastar.rq(%d, "%s", decodeURIComponent("%s"), "%s", "%s"); ""')
+        :format(id, method, jsenc(url), jsenc(jencode(headers)), jsenc(payload or "")))
+    if not launched then
+        handler({ status = 0, response = "html5.run failed" })
+        return
+    end
+    local waited = 0
+    timer.delay(0.15, true, function(_, h)
+        waited = waited + 0.15
+        local ok, res = pcall(html5.run,
+            ('(window.__rastar && window.__rastar.rs[%d]) || ""'):format(id))
+        if ok and res and res ~= "" then
+            timer.cancel(h)
+            pcall(html5.run, ('delete window.__rastar.rs[%d]; ""'):format(id))
+            local parsed = jdecode(res)
+            handler({ status = (parsed and parsed.st) or 0,
+                      response = (parsed and parsed.body) or "" })
+        elseif waited >= (timeout or 15) then
+            timer.cancel(h)
+            handler({ status = 0, response = "timeout" })
+        end
+    end)
+end
+
 -- core request. path is relative ("/api/v1/..."). body is a table or nil.
 -- Resilience built in:
 --  * status 0 (can't connect at all) -> retried once via cfg.fallback_base_url
@@ -122,8 +187,7 @@ local function request(path, method, body, auth, cb, _base, _busted)
     end
     log(method, url, payload or "")
 
-    -- ignore_cache: skip Defold's local http cache (no If-None-Match conditionals)
-    http.request(url, method, function(_, _, response)
+    local function handle_response(response)
         local parsed = jdecode(response.response)
         local status = response.status or 0
         log("->", status, response.response and response.response:sub(1, 200) or "")
@@ -156,7 +220,17 @@ local function request(path, method, body, auth, cb, _base, _busted)
             end
             if cb then cb(false, err, parsed) end
         end
-    end, headers, payload, { timeout = cfg.timeout, ignore_cache = true })
+    end
+
+    if html5 then
+        -- web: the browser itself performs the request (see js_fetch above)
+        js_fetch(url, method, headers, payload, cfg.timeout, handle_response)
+    else
+        -- ignore_cache: skip Defold's local http cache (no If-None-Match conditionals)
+        http.request(url, method, function(_, _, response)
+            handle_response(response)
+        end, headers, payload, { timeout = cfg.timeout, ignore_cache = true })
+    end
 end
 
 --------------------------------------------------------------------------------

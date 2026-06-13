@@ -89,11 +89,23 @@ rastar.init({
 ```lua
 local function ensure_device_id(profile)   -- profile = جدول sys.load شدهٔ خودت
     if profile.device_id then return profile.device_id end
-    math.randomseed(os.time())
-    local hex = {}
-    for i = 1, 32 do hex[i] = string.format("%x", math.random(0, 15)) end
-    profile.device_id = "dfld-" .. table.concat(hex)
-    -- sys.save(...) profile
+    local id
+    -- ⚠️ روی HTML5 از crypto.randomUUID مرورگر استفاده کن، نه math.random!
+    -- در وب، math.randomseed(os.time()) آنتروپی نداره و روی همهٔ مرورگرها
+    -- «همان» ۳۲ رقمِ تکراری رو می‌سازه → همهٔ بازیکن‌ها روی یک اکانت جمع می‌شن.
+    if html5 then
+        local ok, v = pcall(html5.run,
+            '(crypto.randomUUID ? crypto.randomUUID() : (Date.now()+"-"+Math.random())).replace(/[^a-z0-9]/gi,"")')
+        if ok and type(v) == "string" and #v >= 16 then id = "dfld-" .. v end
+    end
+    if not id then
+        math.randomseed(os.time() + (socket and socket.gettime and math.floor(socket.gettime()*1000) or 0))
+        local hex = {}
+        for i = 1, 32 do hex[i] = string.format("%x", math.random(0, 15)) end
+        id = "dfld-" .. table.concat(hex)
+    end
+    profile.device_id = id
+    -- sys.save(...) profile   ← و روی وب در localStorage هم آینه کن (sync تضمینی)
     return profile.device_id
 end
 
